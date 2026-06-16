@@ -63,6 +63,12 @@ source .venv/bin/activate
 pytest -v
 ```
 
+Test layout:
+
+- `tests/test_handlers.py` — unit tests for job handler and payload validation
+- `tests/test_worker.py` — unit tests for worker retry/requeue/failure behavior
+- `tests/test_api.py` — integration tests for the HTTP API end-to-end
+
 ## CI/CD
 
 GitHub Actions runs tests on every push and pull request to `main` (see `.github/workflows/ci.yml`).
