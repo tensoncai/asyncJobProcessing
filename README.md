@@ -59,8 +59,13 @@ GET /jobs/{id}  →  JobStore
 ## Tests
 
 ```bash
-pytest
+source .venv/bin/activate
+pytest -v
 ```
+
+## CI/CD
+
+GitHub Actions runs tests on every push and pull request to `main` (see `.github/workflows/ci.yml`).
 
 ## Deploy to DigitalOcean App Platform
 
