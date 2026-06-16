@@ -46,7 +46,10 @@ class JobWorkerPool:
             try:
                 job = await self._store.mark_running(job_id)
                 if job is None:
-                    self._store.task_done()
+                    await self._store.mark_failed(
+                        job_id,
+                        "Job could not be started: missing or not in queued state",
+                    )
                     continue
 
                 logger.info(
@@ -59,6 +62,9 @@ class JobWorkerPool:
                 result = await process_job(job.payload, attempt=job.attempts)
                 await self._store.mark_completed(job_id, result)
                 logger.info("Worker %d finished job %s", worker_id, job_id)
+            except asyncio.CancelledError:
+                await self._store.mark_failed(job_id, "Job interrupted during shutdown")
+                raise
             except TransientError as exc:
                 if job is not None and job.attempts <= job.max_retries:
                     logger.warning(
@@ -67,7 +73,12 @@ class JobWorkerPool:
                         job_id,
                         exc,
                     )
-                    await self._store.requeue(job_id, str(exc))
+                    requeued = await self._store.requeue(job_id, str(exc))
+                    if not requeued:
+                        await self._store.mark_failed(
+                            job_id,
+                            f"Failed to requeue after transient error: {exc}",
+                        )
                 else:
                     logger.error(
                         "Worker %d exhausted retries for job %s: %s",

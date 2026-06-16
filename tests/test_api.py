@@ -33,6 +33,9 @@ async def _wait_for_status(client, job_id: str, expected_status: str, *, attempt
     return status_response
 
 
+# --- Happy path ---
+
+
 @pytest.mark.asyncio
 async def test_submit_and_poll_job(client):
     response = await client.post("/jobs", json={"payload": {"seconds": 0.1}})
@@ -52,6 +55,18 @@ async def test_submit_and_poll_job(client):
 
 
 @pytest.mark.asyncio
+async def test_empty_payload_uses_defaults(client):
+    response = await client.post("/jobs", json={"payload": {}})
+    assert response.status_code == 202
+    job_id = response.json()["id"]
+
+    status_response = await _wait_for_status(client, job_id, "completed")
+    final = status_response.json()
+    assert final["payload"]["seconds"] == 1.0
+    assert final["max_retries"] == 3
+
+
+@pytest.mark.asyncio
 async def test_retries_transient_failures_until_success(client):
     response = await client.post(
         "/jobs",
@@ -67,23 +82,72 @@ async def test_retries_transient_failures_until_success(client):
     assert final["result"]["attempts"] == 3
 
 
+# --- Submit-time validation (422) ---
+
+
 @pytest.mark.asyncio
-async def test_retries_exhausted_marks_job_failed(client):
+async def test_invalid_seconds_negative_returns_422(client):
+    response = await client.post("/jobs", json={"payload": {"seconds": -1}})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_invalid_seconds_too_large_returns_422(client):
+    response = await client.post("/jobs", json={"payload": {"seconds": 301}})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_invalid_seconds_type_returns_422(client):
+    response = await client.post("/jobs", json={"payload": {"seconds": "fast"}})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_invalid_max_retries_returns_422(client):
+    response = await client.post("/jobs", json={"payload": {"max_retries": 99}})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_transient_failures_exceeds_max_retries_returns_422(client):
     response = await client.post(
         "/jobs",
-        json={"payload": {"seconds": 0.05, "transient_failures": 10, "max_retries": 2}},
+        json={"payload": {"transient_failures": 3, "max_retries": 2}},
     )
-    assert response.status_code == 202
-    job_id = response.json()["id"]
+    assert response.status_code == 422
+    assert "cannot exceed max_retries" in response.text
 
-    status_response = await _wait_for_status(client, job_id, "failed")
-    final = status_response.json()
-    assert final["status"] == "failed"
-    assert final["attempts"] == 3
-    assert "Simulated transient error" in final["error"]
+
+# --- GET edge cases ---
 
 
 @pytest.mark.asyncio
 async def test_get_missing_job_returns_404(client):
     response = await client.get("/jobs/00000000-0000-0000-0000-000000000000")
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_invalid_job_id_returns_422(client):
+    response = await client.get("/jobs/not-a-uuid")
+    assert response.status_code == 422
+
+
+# --- Retry boundary ---
+
+
+@pytest.mark.asyncio
+async def test_transient_failures_at_max_retries_succeeds_on_last_allowed_attempt(client):
+    """transient_failures=2, max_retries=2 → fails twice, succeeds on 3rd attempt."""
+    response = await client.post(
+        "/jobs",
+        json={"payload": {"seconds": 0.05, "transient_failures": 2, "max_retries": 2}},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["id"]
+
+    status_response = await _wait_for_status(client, job_id, "completed")
+    final = status_response.json()
+    assert final["status"] == "completed"
+    assert final["attempts"] == 3

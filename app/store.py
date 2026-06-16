@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from app.jobs.handlers import max_retries_from_payload
 from app.models import JobStatus
 
 
@@ -36,12 +35,8 @@ class JobStore:
         self._lock = asyncio.Lock()
         self._queue: asyncio.Queue[UUID] = asyncio.Queue()
 
-    async def create(self, payload: dict[str, Any]) -> Job:
-        job = Job(
-            id=uuid4(),
-            payload=payload,
-            max_retries=max_retries_from_payload(payload),
-        )
+    async def create(self, payload: dict[str, Any], *, max_retries: int) -> Job:
+        job = Job(id=uuid4(), payload=payload, max_retries=max_retries)
         async with self._lock:
             self._jobs[job.id] = job
         await self._queue.put(job.id)
@@ -49,7 +44,21 @@ class JobStore:
 
     async def get(self, job_id: UUID) -> Optional[Job]:
         async with self._lock:
-            return self._jobs.get(job_id)
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            return Job(
+                id=job.id,
+                payload=dict(job.payload),
+                status=job.status,
+                result=job.result,
+                error=job.error,
+                attempts=job.attempts,
+                max_retries=job.max_retries,
+                created_at=job.created_at,
+                started_at=job.started_at,
+                completed_at=job.completed_at,
+            )
 
     async def dequeue(self) -> UUID:
         return await self._queue.get()
@@ -66,15 +75,15 @@ class JobStore:
                 job.started_at = _utcnow()
             return job
 
-    async def requeue(self, job_id: UUID, error: str) -> Optional[Job]:
+    async def requeue(self, job_id: UUID, error: str) -> bool:
         async with self._lock:
             job = self._jobs.get(job_id)
             if job is None or job.status != JobStatus.RUNNING:
-                return None
+                return False
             job.status = JobStatus.QUEUED
             job.error = error
         await self._queue.put(job_id)
-        return job
+        return True
 
     async def mark_completed(self, job_id: UUID, result: Any) -> Optional[Job]:
         async with self._lock:
@@ -92,6 +101,8 @@ class JobStore:
             job = self._jobs.get(job_id)
             if job is None:
                 return None
+            if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+                return job
             job.status = JobStatus.FAILED
             job.error = error
             job.completed_at = _utcnow()

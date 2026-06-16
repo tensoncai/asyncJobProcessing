@@ -61,3 +61,27 @@ GET /jobs/{id}  →  JobStore
 ```bash
 pytest
 ```
+
+## Deploy to DigitalOcean App Platform
+
+DigitalOcean needs an explicit start command. This repo includes:
+
+- **`Procfile`** — tells the platform how to start the server
+- **`.do/app.yaml`** — optional App Platform spec
+
+**Run command** (also set this in the DO dashboard if needed):
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+In the DigitalOcean UI:
+
+1. Create App → connect your GitHub repo
+2. **Resource type:** Web Service
+3. **Build command:** `pip install -r requirements.txt`
+4. **Run command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+5. **HTTP port:** `8080`
+6. **Instance count:** `1` (required — job store is in-memory)
+
+Commit and push `Procfile`, then redeploy.

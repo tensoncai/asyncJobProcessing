@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class JobStatus(str, Enum):
@@ -15,15 +15,23 @@ class JobStatus(str, Enum):
     FAILED = "failed"
 
 
+class JobPayload(BaseModel):
+    seconds: float = Field(default=1.0, ge=0, le=300)
+    transient_failures: int = Field(default=0, ge=0, le=10)
+    max_retries: int = Field(default=3, ge=0, le=10)
+
+    @model_validator(mode="after")
+    def transient_failures_must_be_retryable(self) -> JobPayload:
+        if self.transient_failures > self.max_retries:
+            raise ValueError(
+                f"transient_failures ({self.transient_failures}) cannot exceed "
+                f"max_retries ({self.max_retries})"
+            )
+        return self
+
+
 class CreateJobRequest(BaseModel):
-    payload: dict[str, Any] = Field(
-        default_factory=dict,
-        examples=[{"seconds": 2, "transient_failures": 1, "max_retries": 3}],
-        description=(
-            "Job input. Use seconds to simulate work duration, transient_failures "
-            "to simulate flaky failures, and max_retries to cap automated retries."
-        ),
-    )
+    payload: JobPayload = Field(default_factory=JobPayload)
 
 
 class CreateJobResponse(BaseModel):
