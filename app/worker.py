@@ -77,7 +77,7 @@ class JobWorkerPool:
                     if not requeued:
                         await self._store.mark_failed(
                             job_id,
-                            f"Failed to requeue after transient error: {exc}",
+                            f"Failed to requeue after transient error (queue may be full): {exc}",
                         )
                 else:
                     logger.error(

@@ -2,6 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 
+from app.jobs.errors import QueueFullError
 from app.models import CreateJobRequest, CreateJobResponse, JobResponse
 from app.store import Job, job_store
 
@@ -27,7 +28,13 @@ def _to_response(job: Job) -> JobResponse:
 async def submit_job(body: CreateJobRequest) -> CreateJobResponse:
     """Accept a job payload and return a job ID immediately."""
     payload = body.payload.model_dump()
-    job = await job_store.create(payload, max_retries=body.payload.max_retries)
+    try:
+        job = await job_store.create(payload, max_retries=body.payload.max_retries)
+    except QueueFullError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     return CreateJobResponse(id=job.id)
 
 

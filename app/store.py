@@ -6,7 +6,10 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
+from app.jobs.errors import QueueFullError
 from app.models import JobStatus
+
+DEFAULT_MAX_QUEUE_SIZE = 100
 
 
 def _utcnow() -> datetime:
@@ -30,16 +33,38 @@ class Job:
 class JobStore:
     """In-memory job store and async queue."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_queue_size: int = DEFAULT_MAX_QUEUE_SIZE) -> None:
+        self._max_queue_size = max_queue_size
         self._jobs: dict[UUID, Job] = {}
         self._lock = asyncio.Lock()
-        self._queue: asyncio.Queue[UUID] = asyncio.Queue()
+        self._queue: asyncio.Queue[UUID] = asyncio.Queue(maxsize=max_queue_size)
+
+    @property
+    def max_queue_size(self) -> int:
+        return self._max_queue_size
+
+    def queue_size(self) -> int:
+        return self._queue.qsize()
 
     async def create(self, payload: dict[str, Any], *, max_retries: int) -> Job:
+        if self._queue.full():
+            raise QueueFullError(
+                f"Job queue is full (max {self._max_queue_size} pending jobs)"
+            )
+
         job = Job(id=uuid4(), payload=payload, max_retries=max_retries)
         async with self._lock:
             self._jobs[job.id] = job
-        await self._queue.put(job.id)
+
+        try:
+            self._queue.put_nowait(job.id)
+        except asyncio.QueueFull:
+            async with self._lock:
+                del self._jobs[job.id]
+            raise QueueFullError(
+                f"Job queue is full (max {self._max_queue_size} pending jobs)"
+            ) from None
+
         return job
 
     async def get(self, job_id: UUID) -> Optional[Job]:
@@ -75,6 +100,14 @@ class JobStore:
                 job.started_at = _utcnow()
             return job
 
+    async def _enqueue(self, job_id: UUID) -> None:
+        try:
+            self._queue.put_nowait(job_id)
+        except asyncio.QueueFull as exc:
+            raise QueueFullError(
+                f"Job queue is full (max {self._max_queue_size} pending jobs)"
+            ) from exc
+
     async def requeue(self, job_id: UUID, error: str) -> bool:
         async with self._lock:
             job = self._jobs.get(job_id)
@@ -82,7 +115,16 @@ class JobStore:
                 return False
             job.status = JobStatus.QUEUED
             job.error = error
-        await self._queue.put(job_id)
+
+        try:
+            await self._enqueue(job_id)
+        except QueueFullError:
+            async with self._lock:
+                job = self._jobs.get(job_id)
+                if job is not None:
+                    job.status = JobStatus.RUNNING
+            return False
+
         return True
 
     async def mark_completed(self, job_id: UUID, result: Any) -> Optional[Job]:
@@ -111,10 +153,11 @@ class JobStore:
     def task_done(self) -> None:
         self._queue.task_done()
 
-    def reset_for_tests(self) -> None:
+    def reset_for_tests(self, max_queue_size: int = DEFAULT_MAX_QUEUE_SIZE) -> None:
         """Clear all jobs and pending queue items (test helper)."""
+        self._max_queue_size = max_queue_size
         self._jobs.clear()
-        self._queue = asyncio.Queue()
+        self._queue = asyncio.Queue(maxsize=max_queue_size)
 
 
 job_store = JobStore()

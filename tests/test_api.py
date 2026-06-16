@@ -119,6 +119,29 @@ async def test_transient_failures_exceeds_max_retries_returns_422(client):
     assert "cannot exceed max_retries" in response.text
 
 
+# --- Queue capacity ---
+
+
+@pytest.mark.asyncio
+async def test_queue_full_returns_503(client):
+    from app.main import worker_pool
+    from app.store import job_store
+
+    await worker_pool.stop()
+    job_store.reset_for_tests(max_queue_size=2)
+
+    response1 = await client.post("/jobs", json={"payload": {"seconds": 60}})
+    response2 = await client.post("/jobs", json={"payload": {"seconds": 60}})
+    response3 = await client.post("/jobs", json={"payload": {"seconds": 60}})
+
+    assert response1.status_code == 202
+    assert response2.status_code == 202
+    assert response3.status_code == 503
+    assert "queue is full" in response3.text.lower()
+
+    await worker_pool.start()
+
+
 # --- GET edge cases ---
 
 
