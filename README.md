@@ -96,3 +96,16 @@ In the DigitalOcean UI:
 6. **Instance count:** `1` (required — job store is in-memory)
 
 Commit and push `Procfile`, then redeploy.
+
+## Known limitations
+
+This project is intentionally scoped for a single-process demo. Be aware of:
+
+- **In-memory storage** — jobs are lost on server restart or redeploy
+- **Single-process only** — the job store is not shared across multiple uvicorn workers or App Platform instances; running more than one process can cause intermittent `404 Job not found` on GET
+- **API and workers are coupled** — workers run inside the API process, not as a separate deployable service
+- **Bounded queue** — pending jobs are capped at 100; additional submissions receive `503 Service Unavailable`
+- **Polling only** — clients must poll `GET /jobs/{id}`; there are no webhooks or push notifications
+- **Mock processing** — jobs simulate work via `asyncio.sleep`; there is no real external task execution
+
+For production, you would replace the in-memory dict with PostgreSQL or Redis, use a durable queue (SQS, RabbitMQ, Redis Streams), run workers as separate scaled services, and add webhooks for completion events.
